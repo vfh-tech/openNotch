@@ -17,12 +17,15 @@ from shelf_panel import ShelfPanel
 from notch_state import Banner, NotchState, Page
 from notifications import NotificationMonitor
 from outputs import OutputBinding
+from geometry import next_section
+from settings import NotchSettings
 SHELF_PATH = GLib.get_user_config_dir() + '/cosmic-tray-notch/shelf.json'
 
 WATCHER = 'org.kde.StatusNotifierWatcher'
 ITEM = 'org.kde.StatusNotifierItem'
 CLOSED_W, CLOSED_H = 108, 18
 COLS, CELL, INSET = 8, 42, 16
+SETTINGS_PATH = GLib.get_user_config_dir() + '/cosmic-tray-notch/notch.json'
 WIDTH = COLS * CELL + 2 * INSET
 
 
@@ -219,6 +222,8 @@ class Notch:
         self.tick = self.timer = 0
         self.notice_timer = 0
         self.state = NotchState()
+        self.config = NotchSettings(SETTINGS_PATH)
+        self.section = 'all'
         self.agenda = None
         self.shelf = None
         self.count = 0
@@ -233,10 +238,11 @@ class Notch:
         Layer.set_exclusive_zone(self.window, -1)
         Layer.set_keyboard_mode(self.window, Layer.KeyboardMode.ON_DEMAND)
         self.window.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK
-                               | Gdk.EventMask.BUTTON_PRESS_MASK)
+                               | Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
         self.window.connect('enter-notify-event', self.enter)
         self.window.connect('leave-notify-event', self.leave)
         self.window.connect('button-press-event', self.press_background)
+        self.window.connect('scroll-event', self.on_scroll)
         self.window.connect('key-press-event', self.key)
         self.window.connect('destroy', Gtk.main_quit)
         self.canvas = Gtk.Fixed()
@@ -299,25 +305,45 @@ class Notch:
         self.canvas.move(self.grid, (WIDTH - CELL * min(count, COLS)) // 2, 24)
         self.layout_audio()
 
+
+    def section_visible(self, name):
+        return self.section in ('all', name) and self.config[f'show_{name}']
+
+    def on_scroll(self, _widget, event):
+        if not self.config['scroll_navigation']:
+            return False
+        if event.direction not in (Gdk.ScrollDirection.UP, Gdk.ScrollDirection.DOWN):
+            return False
+        enabled = {'media': self.config['show_media'], 'agenda': self.config['show_agenda'],
+                   'shelf': self.config['show_shelf']}
+        self.section = next_section(self.section, enabled)
+        self.layout_audio()
+        return True
+
     def layout_audio(self):
         if self.audio is None:
             return
+        media = self.media_height()
         self.canvas.move(self.audio, INSET, self.height)
         self.canvas.move(self.focus, INSET, self.open_height() - 44)
         self.canvas.set_size_request(WIDTH, max(104, self.open_height()))
         self.frame()
         if self.agenda is not None:
-            self.canvas.move(self.agenda, INSET, self.height + 68 + (68 if self.audio and self.audio.media.get_visible() else 0))
+            self.canvas.move(self.agenda, INSET, self.height + 68 + media)
         if self.shelf is not None:
-            offset = self.height + 68 + (68 if self.audio and self.audio.media.get_visible() else 0)
-            offset += self.agenda.height if self.agenda is not None else 0
+            offset = self.height + 68 + media
+            offset += self.agenda.height if self.agenda is not None and self.section_visible('agenda') else 0
             self.canvas.move(self.shelf, INSET, offset)
 
+    def media_height(self):
+        if self.audio is None or not self.section_visible('media'):
+            return 0
+        return 68 if self.audio.media.get_visible() else 0
+
     def open_height(self):
-        media = 68 if self.audio and self.audio.media.get_visible() else 0
-        agenda = self.agenda.height if self.agenda is not None else 0
-        shelf = self.shelf.height if self.shelf is not None else 0
-        return self.height + 88 + media + agenda + shelf
+        agenda = self.agenda.height if self.agenda is not None and self.section_visible('agenda') else 0
+        shelf = self.shelf.height if self.shelf is not None and self.section_visible('shelf') else 0
+        return self.height + 88 + self.media_height() + agenda + shelf
 
     def geometry(self):
         high = 104 if self.displayed_banner else self.open_height()
@@ -364,13 +390,13 @@ class Notch:
         self.grid.set_visible(tray_visible and bool(self.count))
         self.empty.set_visible(tray_visible and not self.count)
         if self.audio is not None:
-            self.audio.set_visible(tray_visible)
+            self.audio.set_visible(tray_visible and self.section_visible('media'))
         self.notice_box.set_visible(visible and self.displayed_banner is not None)
         self.focus.set_visible(tray_visible)
         if self.agenda is not None:
-            self.agenda.set_visible(tray_visible)
+            self.agenda.set_visible(tray_visible and self.section_visible('agenda'))
         if self.shelf is not None:
-            self.shelf.set_visible(tray_visible)
+            self.shelf.set_visible(tray_visible and self.section_visible('shelf'))
         surface = self.window.get_window()
         if surface:
             surface.input_shape_combine_region(cairo.Region(cairo.RectangleInt((WIDTH - w) // 2, 0, w, h)), 0, 0)
