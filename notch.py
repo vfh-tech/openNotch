@@ -13,9 +13,11 @@ from gi.repository import DbusmenuGtk3, Gdk, GdkPixbuf, Gio, GLib, Gtk, GtkLayer
 from audio import AudioControls
 from focus_timer import FocusTimer
 from agenda_panel import AgendaPanel
+from shelf_panel import ShelfPanel
 from notch_state import Banner, NotchState, Page
 from notifications import NotificationMonitor
 from outputs import OutputBinding
+SHELF_PATH = GLib.get_user_config_dir() + '/cosmic-tray-notch/shelf.json'
 
 WATCHER = 'org.kde.StatusNotifierWatcher'
 ITEM = 'org.kde.StatusNotifierItem'
@@ -218,6 +220,7 @@ class Notch:
         self.notice_timer = 0
         self.state = NotchState()
         self.agenda = None
+        self.shelf = None
         self.count = 0
         self.height = 74
         self.window = Gtk.Window(decorated=False, app_paintable=True, resizable=False)
@@ -270,6 +273,9 @@ class Notch:
         self.agenda = AgendaPanel(self.layout_audio, WIDTH - 2 * INSET)
         self.canvas.put(self.agenda, INSET, 0)
         self.layout_audio()
+        self.shelf = ShelfPanel(self.layout_audio, WIDTH - 2 * INSET, SHELF_PATH)
+        self.canvas.put(self.shelf, INSET, 0)
+        self.layout_audio()
         self.tray = Tray(self.grid, self.on_items, self.hold_menu)
         self.notifications = NotificationMonitor(self.show_notice)
         self.output = OutputBinding(self.window.get_display(), self.window, self.output_changed)
@@ -302,11 +308,16 @@ class Notch:
         self.frame()
         if self.agenda is not None:
             self.canvas.move(self.agenda, INSET, self.height + 68 + (68 if self.audio and self.audio.media.get_visible() else 0))
+        if self.shelf is not None:
+            offset = self.height + 68 + (68 if self.audio and self.audio.media.get_visible() else 0)
+            offset += self.agenda.height if self.agenda is not None else 0
+            self.canvas.move(self.shelf, INSET, offset)
 
     def open_height(self):
         media = 68 if self.audio and self.audio.media.get_visible() else 0
         agenda = self.agenda.height if self.agenda is not None else 0
-        return self.height + 88 + media + agenda
+        shelf = self.shelf.height if self.shelf is not None else 0
+        return self.height + 88 + media + agenda + shelf
 
     def geometry(self):
         high = 104 if self.displayed_banner else self.open_height()
@@ -358,6 +369,8 @@ class Notch:
         self.focus.set_visible(tray_visible)
         if self.agenda is not None:
             self.agenda.set_visible(tray_visible)
+        if self.shelf is not None:
+            self.shelf.set_visible(tray_visible)
         surface = self.window.get_window()
         if surface:
             surface.input_shape_combine_region(cairo.Region(cairo.RectangleInt((WIDTH - w) // 2, 0, w, h)), 0, 0)
