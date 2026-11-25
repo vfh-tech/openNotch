@@ -52,4 +52,4 @@ Verified on Pop!_OS 24.04 with COSMIC 1.11. The notch paints a 368 px wide pill 
 
 ## License
 
-No licence file is included yet. Treat the source as all rights reserved until one is added.
+MIT. See [LICENSE](LICENSE).

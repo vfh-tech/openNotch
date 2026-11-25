@@ -115,7 +115,9 @@ class FocusTimer(Gtk.Box):
         self.label.set_text(f'Fokus · {self.format_time(base)}')
         self.toggle.set_label('Jeda' if self.running else 'Mulai' if remaining is None else 'Lanjut')
         self.reset.set_sensitive(remaining is not None)
-        self.spin.set_sensitive(not self.running)
+        self.reset.set_sensitive(remaining is not None)
+        if remaining is not None and remaining <= 0:
+            self.label.set_text(f'Fokus · {self.format_time(0)}')
         self.led.set_visible(self.running)
         self.refresh_led()
         self.sync_blink()
@@ -150,8 +152,9 @@ class FocusTimer(Gtk.Box):
             else:
                 self.paused = remaining
         else:
-            remaining = self.duration if self.paused is None else self.paused
-            self.deadline = self.clock() + remaining
+            if not self.paused:
+                self.paused = float(self.duration)
+            self.deadline = self.clock() + self.paused
             self.paused = None
             self.source = GLib.timeout_add(250, self.tick)
         self.update()
@@ -169,9 +172,11 @@ class FocusTimer(Gtk.Box):
         self.changed()
 
     def tick(self):
-        if self.countdown <= 0:
+        remaining = self.countdown
+        if remaining is not None and remaining <= 0:
             self.source = 0
             self.deadline = None
+            self.paused = 0.0
             self.update()
             self.changed()
             self.finished()
