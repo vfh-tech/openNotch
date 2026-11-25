@@ -257,7 +257,7 @@ class Notch:
             self.notice_labels.append(label)
         self.canvas.put(self.notice_box, 20, 13)
         css = Gtk.CssProvider()
-        css.load_from_data(b'window { background-color: transparent; } label { color: #eee; } .notice-title { font-weight: bold; } button { background: transparent; border: 0; box-shadow: none; padding: 4px; border-radius: 9px; color: #fafafa; } button:hover, button:focus { background: #34343b; }')
+        css.load_from_data(b'window { background-color: transparent; } label { color: #eee; } .notice-title { font-weight: bold; } .notice-meta { color: #b9b9c0; font-size: 11px; } button { background: transparent; border: 0; box-shadow: none; padding: 4px; border-radius: 9px; color: #fafafa; } button:hover, button:focus { background: #34343b; } scale { padding: 0 2px; }')
         Gtk.StyleContext.add_provider_for_screen(screen, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.focus = FocusTimer(self.canvas.queue_draw, self.focus_complete, WIDTH - 2 * INSET)
         self.canvas.put(self.focus, INSET, 0)
@@ -297,7 +297,7 @@ class Notch:
         self.frame()
 
     def open_height(self):
-        return self.height + 88 + (48 if self.audio and self.audio.media.get_visible() else 0)
+        return self.height + 88 + (68 if self.audio and self.audio.media.get_visible() else 0)
 
     def geometry(self):
         high = 104 if self.displayed_banner else self.open_height()

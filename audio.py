@@ -1,12 +1,13 @@
 import logging
 import re
-from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import gi
-
+gi.require_version('Gtk', '3.0')
 gi.require_version('Playerctl', '2.0')
-from gi.repository import GdkPixbuf, Gio, GLib, Gtk, Pango, Playerctl
+from gi.repository import Gio, GLib, Gtk, Pango, Playerctl
+
+from artwork import ArtworkLoader
+from media import MediaModel, Playback, PlayerSnapshot, format_clock
 
 SINK = '@DEFAULT_AUDIO_SINK@'
 VOLUME = ('wpctl', 'get-volume', SINK)
@@ -28,8 +29,14 @@ class AudioControls(Gtk.Box):
         self.set_size_request(width, -1)
         self.resized = resized
         self.player = None
-        self.art_url = None
         self.volume = None
+        self.model = MediaModel()
+        self.artwork = ArtworkLoader()
+        self.art_url = None
+        self.active = False
+        self.position_source = 0
+        self.building_menu = False
+        self.seeking = False
         self.busy = False
 
         self.media = Gtk.Box(spacing=6)
@@ -56,6 +63,22 @@ class AudioControls(Gtk.Box):
             button.set_valign(Gtk.Align.CENTER)
             self.media.pack_start(button, False, False, 0)
         self.media.set_size_request(-1, 48)
+        self.progress = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 1, 1)
+        self.progress.set_draw_value(False)
+        self.progress.set_size_request(-1, 14)
+        self.progress.get_accessible().set_name('Posisi lagu')
+        self.progress.connect('change-value', self.seek)
+        self.elapsed = Gtk.Label(label='', xalign=0)
+        self.elapsed.get_style_context().add_class('notice-meta')
+        self.players = Gtk.MenuButton()
+        self.players.set_image(Gtk.Image.new_from_icon_name('view-list-symbolic', Gtk.IconSize.BUTTON))
+        self.players.set_tooltip_text('Pilih pemutar')
+        self.players.get_accessible().set_name('Pilih pemutar')
+        line = Gtk.Box(spacing=4)
+        line.pack_start(self.progress, True, True, 0)
+        line.pack_start(self.elapsed, False, False, 0)
+        line.pack_start(self.players, False, False, 0)
+        self.pack_start(line, False, False, 0)
         self.pack_start(self.media, False, False, 0)
 
         self.sound = Gtk.Box(spacing=6)
@@ -76,11 +99,15 @@ class AudioControls(Gtk.Box):
         self.media.set_no_show_all(True)
         self.manager = Playerctl.PlayerManager()
         self.manager.connect('name-appeared', self.add_player)
-        self.manager.connect('player-vanished', self.select_player)
+        self.manager.connect('player-vanished', self.player_vanished)
         for name in self.manager.props.player_names:
             self.add_player(self.manager, name)
         self.select_player()
         self.update_volume()
+
+    def player_vanished(self, _manager, player):
+        self.model.vanish(str(player.props.player_name))
+        self.select_player()
 
     def add_player(self, manager, name):
         try:
@@ -95,40 +122,146 @@ class AudioControls(Gtk.Box):
             logging.debug('MPRIS player unavailable: %s', exc)
 
     def select_player(self, *_):
-        players = self.manager.props.players
-        self.player = next((p for p in players if p.props.playback_status == Playerctl.PlaybackStatus.PLAYING),
-                           players[0] if players else None)
-        player = self.player
-        if player:
-            self.title.set_text(player.get_title() or player.props.player_name)
-            self.artist.set_text(player.get_artist() or player.props.player_name)
-            playing = player.props.playback_status == Playerctl.PlaybackStatus.PLAYING
+        snapshots = [self.snapshot(player) for player in self.manager.props.players]
+        snapshot = self.model.choose(snapshots)
+        names = {str(p.props.player_name): p for p in self.manager.props.players}
+        self.player = names.get(snapshot.name) if snapshot else None
+        if snapshot:
+            self.title.set_text(snapshot.title or snapshot.name)
+            self.artist.set_text(snapshot.artist or snapshot.name)
+            playing = snapshot.playback is Playback.PLAYING
             self.play.get_image().set_from_icon_name('media-playback-pause-symbolic' if playing else
                                                       'media-playback-start-symbolic', Gtk.IconSize.BUTTON)
-            self.play.set_sensitive(player.props.can_control and (player.props.can_pause if playing else player.props.can_play))
-            self.previous.set_sensitive(player.props.can_control and player.props.can_go_previous)
-            self.next.set_sensitive(player.props.can_control and player.props.can_go_next)
-            metadata = player.props.metadata
-            art = metadata.lookup_value('mpris:artUrl', GLib.VariantType.new('s')) if metadata else None
-            self.set_art(art.get_string() if art else None)
-        self.media.set_visible(player is not None)
+            self.play.set_sensitive(snapshot.can_control and (snapshot.can_pause if playing else snapshot.can_play))
+            self.previous.set_sensitive(snapshot.can_control and snapshot.can_previous)
+            self.next.set_sensitive(snapshot.can_control and snapshot.can_next)
+            self.progress.set_sensitive(snapshot.can_seek)
+            self.progress.set_range(0, max(1, snapshot.length_us or 1))
+            if self.model.track_changed(snapshot):
+                self.model.accept(snapshot)
+                self.art_url = None
+                self.load_art(snapshot.art_url)
+            self.update_position(snapshot)
+            self.build_player_menu([s.name for s in snapshots])
+            if not playing:
+                self.stop_position()
+        else:
+            self.stop_position()
+        self.media.set_visible(snapshot is not None)
         self.resized()
 
-    def set_art(self, url):
-        if url == self.art_url:
+    @staticmethod
+    def snapshot(player):
+        metadata = player.props.metadata
+        def text(key):
+            value = metadata.lookup_value(key, None) if metadata else None
+            kind = value.get_type_string() if value else ''
+            if kind == 's':
+                return value.get_string()
+            if kind == 'as':
+                return ', '.join(value.unpack())
+            return ''
+        def number(key):
+            value = metadata.lookup_value(key, GLib.VariantType.new('x')) if metadata else None
+            return value.get_int64() if value else None
+        status = player.props.playback_status
+        playback = (Playback.PLAYING if status == Playerctl.PlaybackStatus.PLAYING else
+                    Playback.PAUSED if status == Playerctl.PlaybackStatus.PAUSED else Playback.STOPPED)
+        metadata_id = text('mpris:trackid') or text('xesam:url')
+        return PlayerSnapshot(
+            name=str(player.props.player_name), playback=playback,
+            track_id=metadata_id or text('xesam:title'),
+            title=text('xesam:title'), artist=text('xesam:artist'), art_url=text('mpris:artUrl') or None,
+            length_us=number('mpris:length'), can_control=player.props.can_control,
+            can_play=player.props.can_play, can_pause=player.props.can_pause,
+            can_next=player.props.can_go_next, can_previous=player.props.can_go_previous,
+            can_seek=player.props.can_seek)
+
+    def update_position(self, snapshot):
+        if self.seeking:
             return
+        position = self.player.get_position() if self.player else -1
+        length = snapshot.length_us or 0
+        self.progress.set_value(min(position, length) if length and position >= 0 else 0)
+        self.elapsed.set_text(f'{format_clock(max(position, 0))} / {format_clock(length) or "--:--"}')
+        if snapshot.playback is Playback.PLAYING and self.active:
+            if not self.position_source:
+                self.position_source = GLib.timeout_add_seconds(1, self.tick_position)
+        else:
+            self.stop_position()
+
+    def tick_position(self):
+        if not self.active or not self.player:
+            self.position_source = 0
+            return GLib.SOURCE_REMOVE
+        self.update_position(self.snapshot(self.player))
+        return GLib.SOURCE_CONTINUE if self.position_source else GLib.SOURCE_REMOVE
+
+    def stop_position(self):
+        if self.position_source:
+            GLib.source_remove(self.position_source)
+            self.position_source = 0
+
+    def seek(self, _scale, _scroll, value):
+        self.seeking = True
+        if self.player and self.player.props.can_seek:
+            self.player.set_position(int(value))
+        GLib.timeout_add(400, self.seek_settled)
+        return False
+
+    def seek_settled(self):
+        self.seeking = False
+        return GLib.SOURCE_REMOVE
+
+    def build_player_menu(self, names):
+        self.building_menu = True
+        menu = Gtk.Menu()
+        group = []
+        self.player_items = []
+        for name in sorted(names):
+            item = Gtk.RadioMenuItem(label=name, group=group[0] if group else None)
+            group.append(item)
+            item.player_name = name
+            item.connect('activate', self.prefer_player, name)
+            item.set_active(name == self.model.selected)
+            menu.append(item)
+            self.player_items.append(item)
+        menu.show_all()
+        self.players.set_popup(menu)
+        self.players.set_visible(len(names) > 1)
+        self.building_menu = False
+
+    def prefer_player(self, _item, name):
+        if self.building_menu:
+            return
+        self.model.prefer(name)
+        self.select_player()
+
+    def set_visible(self, visible):
+        if visible == self.active:
+            super().set_visible(visible)
+            return
+        super().set_visible(visible)
+        self.active = visible
+        if visible:
+            self.select_player()
+            self.load_art(self.art_url)
+        else:
+            self.stop_position()
+            self.artwork.load(None, self.art_ready)
+
+    def load_art(self, url):
         self.art_url = url
         self.cover.set_from_icon_name('audio-x-generic-symbolic', Gtk.IconSize.BUTTON)
-        if not url:
+        if not url or not self.active:
             return
-        try:
-            parsed = urlsplit(url)
-            if parsed.scheme == 'file' and parsed.netloc in ('', 'localhost'):
-                path = Path(unquote(parsed.path))
-                if path.is_file() and path.stat().st_size <= 8 * 1024 * 1024:
-                    self.cover.set_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 34, 34, True))
-        except (GLib.Error, OSError, ValueError) as exc:
-            logging.debug('MPRIS artwork unavailable: %s', exc)
+        self.artwork.load(url, self.art_ready)
+
+    def art_ready(self, url, artwork):
+        if artwork is None:
+            self.cover.set_from_icon_name('audio-x-generic-symbolic', Gtk.IconSize.BUTTON)
+            return
+        self.cover.set_from_pixbuf(artwork.scale_simple(34, 34, 2))
 
     def transport(self, method):
         player = self.player
