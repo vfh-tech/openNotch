@@ -1,0 +1,9 @@
+[Unit]
+Description=COSMIC Tray Notch and Notification Banners
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/share/cosmic-tray-notch/launch.sh
+Restart=always
+RestartSec=2s
+Environment=PYTHONDONTWRITEBYTECODE=1

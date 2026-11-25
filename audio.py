@@ -45,11 +45,14 @@ class AudioControls(Gtk.Box):
         self.media.pack_start(self.cover, False, False, 0)
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         text.set_valign(Gtk.Align.CENTER)
+        text.set_size_request(1, -1)
         self.title, self.artist = Gtk.Label(xalign=0), Gtk.Label(xalign=0)
         for label in (self.title, self.artist):
             label.set_single_line_mode(True)
             label.set_ellipsize(Pango.EllipsizeMode.END)
             label.set_width_chars(1)
+            label.set_max_width_chars(20)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
             text.pack_start(label, False, False, 0)
         self.title.get_style_context().add_class('notice-title')
         self.media.pack_start(text, True, True, 0)
@@ -68,7 +71,9 @@ class AudioControls(Gtk.Box):
         self.progress.set_size_request(-1, 14)
         self.progress.get_accessible().set_name('Posisi lagu')
         self.progress.connect('change-value', self.seek)
+        self.progress.set_no_show_all(True)
         self.elapsed = Gtk.Label(label='', xalign=0)
+        self.elapsed.set_no_show_all(True)
         self.elapsed.get_style_context().add_class('notice-meta')
         self.players = Gtk.MenuButton()
         self.players.set_image(Gtk.Image.new_from_icon_name('view-list-symbolic', Gtk.IconSize.BUTTON))
@@ -78,6 +83,7 @@ class AudioControls(Gtk.Box):
         line.pack_start(self.progress, True, True, 0)
         line.pack_start(self.elapsed, False, False, 0)
         line.pack_start(self.players, False, False, 0)
+        self.progress_line = line
         self.pack_start(line, False, False, 0)
         self.pack_start(self.media, False, False, 0)
 
@@ -135,6 +141,9 @@ class AudioControls(Gtk.Box):
             self.play.set_sensitive(snapshot.can_control and (snapshot.can_pause if playing else snapshot.can_play))
             self.previous.set_sensitive(snapshot.can_control and snapshot.can_previous)
             self.next.set_sensitive(snapshot.can_control and snapshot.can_next)
+            measurable = bool(snapshot.length_us)
+            self.progress.set_visible(measurable)
+            self.elapsed.set_visible(measurable)
             self.progress.set_sensitive(snapshot.can_seek)
             self.progress.set_range(0, max(1, snapshot.length_us or 1))
             if self.model.track_changed(snapshot):
@@ -183,7 +192,7 @@ class AudioControls(Gtk.Box):
         position = self.player.get_position() if self.player else -1
         length = snapshot.length_us or 0
         self.progress.set_value(min(position, length) if length and position >= 0 else 0)
-        self.elapsed.set_text(f'{format_clock(max(position, 0))} / {format_clock(length) or "--:--"}')
+        self.elapsed.set_text(f'{format_clock(max(position, 0))} / {format_clock(length)}')
         if snapshot.playback is Playback.PLAYING and self.active:
             if not self.position_source:
                 self.position_source = GLib.timeout_add_seconds(1, self.tick_position)

@@ -10,7 +10,7 @@ def input_region(edge_width, visible_width, height):
     return left, 0, max(0, int(visible_width)), max(0, int(height))
 
 
-SECTIONS = ('all', 'media', 'agenda', 'shelf')
+SECTIONS = ('all', 'media', 'agenda')
 
 
 def next_section(current, enabled):

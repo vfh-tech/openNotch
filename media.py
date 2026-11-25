@@ -24,6 +24,10 @@ class PlayerSnapshot:
     can_previous: bool = False
     can_seek: bool = False
 
+    @property
+    def has_track(self):
+        return bool(self.title or self.track_id)
+
 
 def format_clock(microseconds):
     if microseconds is None:
@@ -36,6 +40,7 @@ class MediaModel:
     def __init__(self):
         self.pinned = None
         self.visible = None
+        self.manual = False
         self.last = (None, '')
 
     @property
@@ -44,6 +49,7 @@ class MediaModel:
 
     def prefer(self, name):
         self.pinned = name
+        self.manual = True
 
     def vanish(self, name):
         if self.pinned == name:
@@ -52,13 +58,24 @@ class MediaModel:
             self.visible = None
 
     def choose(self, players):
-        chosen = next((p for p in players if p.name == self.pinned), None)
+        by_name = {p.name: p for p in players}
+        pinned = by_name.get(self.pinned)
+        playing = next((p for p in players if p.playback is Playback.PLAYING), None)
+        if self.manual and pinned is not None:
+            chosen = pinned
+        elif pinned is not None and pinned.playback is not Playback.STOPPED:
+            chosen = pinned
+        elif playing is not None:
+            chosen = playing
+        else:
+            chosen = pinned or next((p for p in players if p.has_track), None)
         if chosen is None:
-            chosen = next((p for p in players if p.playback is Playback.PLAYING),
-                          players[0] if players else None)
-            if self.pinned is None and chosen is not None:
-                self.pinned = chosen.name
-        self.visible = chosen.name if chosen else None
+            self.visible = self.pinned = None
+            self.manual = False
+            return None
+        self.visible = chosen.name
+        if not self.manual:
+            self.pinned = chosen.name
         return chosen
 
     def track_changed(self, snapshot):

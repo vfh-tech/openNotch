@@ -17,7 +17,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_defaults_are_complete(self):
         s = NotchSettings(self.path)
-        for key in ('width', 'hover_delay_ms', 'agenda_limit', 'shelf_limit', 'show_agenda', 'show_shelf'):
+        for key in ('width', 'hover_delay_ms', 'agenda_limit', 'show_agenda', 'show_media'):
             self.assertIn(key, s.values)
         self.assertEqual(s.values['width'], DEFAULTS['width'])
 
@@ -45,8 +45,8 @@ class SettingsTests(unittest.TestCase):
 
     def test_reload_reads_saved_values(self):
         s = NotchSettings(self.path)
-        s.set('show_shelf', False)
-        self.assertFalse(NotchSettings(self.path).values['show_shelf'])
+        s.set('show_media', False)
+        self.assertFalse(NotchSettings(self.path).values['show_media'])
 
     def test_corrupt_file_falls_back_to_defaults(self):
         self.path.write_text('not json')

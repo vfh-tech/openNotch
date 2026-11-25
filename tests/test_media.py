@@ -20,14 +20,13 @@ class MediaModelTests(unittest.TestCase):
         model.choose([player('a', Playback.PAUSED), player('b', Playback.PLAYING)])
         self.assertEqual(model.selected, 'a')
 
-    def test_transient_miss_keeps_the_pin(self):
+    def test_live_playing_player_takes_over_from_a_stale_pin(self):
         model = MediaModel()
-        model.choose([player('a'), player('b', Playback.PLAYING)])
+        model.choose([player('a', Playback.PLAYING)])
+        self.assertEqual(model.selected, 'a')
+        chosen = model.choose([player('a', Playback.STOPPED), player('b', Playback.PLAYING)])
+        self.assertEqual(chosen.name, 'b')
         self.assertEqual(model.selected, 'b')
-        fallback = model.choose([player('a', Playback.PLAYING)])
-        self.assertEqual(fallback.name, 'a')
-        self.assertEqual(model.selected, 'b')
-        self.assertEqual(model.choose([player('a'), player('b')]).name, 'b')
 
     def test_vanish_releases_the_pin(self):
         model = MediaModel()

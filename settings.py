@@ -7,9 +7,7 @@ DEFAULTS = {
     'width': 368,
     'hover_delay_ms': 100,
     'agenda_limit': 4,
-    'shelf_limit': 8,
     'show_agenda': True,
-    'show_shelf': True,
     'show_media': True,
     'scroll_navigation': True,
 }
@@ -18,7 +16,6 @@ RANGES = {
     'width': (280, 640),
     'hover_delay_ms': (0, 800),
     'agenda_limit': (0, 8),
-    'shelf_limit': (0, 12),
 }
 
 VERSION = 1
