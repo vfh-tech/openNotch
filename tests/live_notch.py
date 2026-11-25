@@ -74,6 +74,7 @@ def main():
         assert notch.geometry() == (108, 18)
         connected = False
         notch.output.schedule()
+        notch.window.close()
 
     @at(2700)
     def reconnect():

@@ -10,7 +10,15 @@ class OutputBinding:
         self.pending = 0
         display.connect('monitor-added', self.schedule)
         display.connect('monitor-removed', self.schedule)
+        window.connect('delete-event', self.surface_closed)
         self.schedule()
+
+    def surface_closed(self, window, _event):
+        window.hide()
+        self.monitor = None
+        self.refresh(False)
+        self.schedule()
+        return True
 
     def schedule(self, *_):
         if self.pending:
