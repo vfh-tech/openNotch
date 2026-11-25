@@ -12,6 +12,7 @@ from gi.repository import DbusmenuGtk3, Gdk, GdkPixbuf, Gio, GLib, Gtk, GtkLayer
 
 from audio import AudioControls
 from focus_timer import FocusTimer
+from notch_state import Banner, NotchState, Page
 from notifications import NotificationMonitor
 from outputs import OutputBinding
 
@@ -214,9 +215,7 @@ class Notch:
         self.progress = self.target = 0.0
         self.tick = self.timer = 0
         self.notice_timer = 0
-        self.notice_active = self.hovering = False
-        self.focus_pending = False
-        self.menu = None
+        self.state = NotchState()
         self.count = 0
         self.height = 74
         self.window = Gtk.Window(decorated=False, app_paintable=True, resizable=False)
@@ -271,18 +270,17 @@ class Notch:
         self.output = OutputBinding(self.window.get_display(), self.window, self.output_changed)
 
     def output_changed(self, mapped):
+        self.state.set_output(mapped)
         if not mapped:
-            self.hovering = False
             if self.tick:
                 self.window.remove_tick_callback(self.tick)
                 self.tick = 0
-            self.animate(bool(self.notice_timer))
-            self.progress = self.target
+            self.progress = self.target = 0.0
             logging.info('Waiting for a Wayland output')
         else:
             logging.info('COSMIC tray notch ready: %d registered apps', self.count)
-            self.show_focus_completion()
-        self.frame()
+            self.show_queued_banner()
+        self.sync_page()
 
     def on_items(self, count):
         self.count = count
@@ -302,9 +300,13 @@ class Notch:
         return self.height + 88 + (48 if self.audio and self.audio.media.get_visible() else 0)
 
     def geometry(self):
-        high = 104 if self.notice_active else self.open_height()
+        high = 104 if self.displayed_banner else self.open_height()
         return (round(CLOSED_W + (WIDTH - CLOSED_W) * self.progress),
                 round(CLOSED_H + (high - CLOSED_H) * self.progress))
+
+    @property
+    def displayed_banner(self):
+        return self.state.banner or self.state.outgoing
 
     def draw(self, _widget, ctx):
         w, h = self.geometry()
@@ -338,12 +340,12 @@ class Notch:
     def frame(self):
         w, h = self.geometry()
         visible = self.progress > .92
-        tray_visible = visible and not self.notice_active
+        tray_visible = visible and not self.displayed_banner
         self.grid.set_visible(tray_visible and bool(self.count))
         self.empty.set_visible(tray_visible and not self.count)
         if self.audio is not None:
             self.audio.set_visible(tray_visible)
-        self.notice_box.set_visible(visible and self.notice_active)
+        self.notice_box.set_visible(visible and self.displayed_banner is not None)
         self.focus.set_visible(tray_visible)
         surface = self.window.get_window()
         if surface:
@@ -360,8 +362,7 @@ class Notch:
         self.target, origin = target, self.progress
         if not self.window.get_mapped():
             self.progress = target
-            if not target:
-                self.notice_active = False
+            self.state.outgoing = None
             self.frame()
             return False
         start = GLib.get_monotonic_time()
@@ -375,88 +376,94 @@ class Notch:
             if t >= 1:
                 self.tick = 0
                 if not target:
-                    self.notice_active = False
+                    self.state.outgoing = None
             return t < 1
         self.tick = self.window.add_tick_callback(step)
         return False
 
-    def focus_complete(self):
-        self.focus_pending = True
-        self.show_focus_completion()
+    def sync_page(self):
+        self.animate(self.state.page in (Page.TRAY, Page.BANNER))
+        self.frame()
 
-    def show_focus_completion(self):
-        if self.focus_pending and not self.notice_timer and self.window.get_mapped():
-            self.focus_pending = False
-            self.show_notice('Timer Fokus', 'Waktu fokus selesai', 'Ambil jeda sebelum sesi berikutnya.')
+    def focus_complete(self):
+        self.state.queued = Banner('Timer Fokus', 'Waktu fokus selesai',
+                                  'Ambil jeda sebelum sesi berikutnya.')
+        self.show_queued_banner()
+
+    def show_queued_banner(self):
+        banner = self.state.take_queued()
+        if banner is not None:
+            self.show_notice(banner.app, banner.title, banner.body)
 
     def show_notice(self, app, title, body):
         if self.notice_timer:
             GLib.source_remove(self.notice_timer)
-        self.notice_active = True
+        self.state.show(Banner(app, title, body))
         for label, text in zip(self.notice_labels, (app, title, body)):
             label.set_text(text)
-        self.animate(True)
-        self.frame()
         self.notice_timer = GLib.timeout_add(5500, self.expire_notice)
+        self.sync_page()
 
     def expire_notice(self):
         self.notice_timer = 0
-        if self.focus_pending and self.window.get_mapped():
-            self.show_focus_completion()
-            return GLib.SOURCE_REMOVE
-        if self.hovering:
-            self.notice_active = False
-            self.frame()
-        elif self.menu is None:
-            self.animate(False)
+        self.dismiss_notice()
         return GLib.SOURCE_REMOVE
 
+    def dismiss_notice(self):
+        if self.notice_timer:
+            GLib.source_remove(self.notice_timer)
+            self.notice_timer = 0
+        self.state.dismiss(animate=True)
+        self.show_queued_banner()
+        self.sync_page()
+
     def press_background(self, _widget, event):
-        if event.button == 1 and self.notice_active:
-            if self.notice_timer:
-                GLib.source_remove(self.notice_timer)
-                self.notice_timer = 0
-            self.notice_active = False
-            self.frame()
-            self.show_focus_completion()
+        if event.button == 1 and self.state.banner is not None:
+            self.dismiss_notice()
             return True
-        return self.animate(True)
+        self.state.manual = True
+        self.sync_page()
+        return False
 
     def enter(self, _widget, event):
         if event.detail != Gdk.NotifyType.INFERIOR:
-            self.hovering = True
-            if not self.notice_active:
+            self.state.hover = True
+            self.state.outgoing = None
+            if self.state.banner is None:
                 self.audio.refresh()
-            self.animate(True)
+            self.sync_page()
         return False
 
     def leave(self, _widget, event):
         if event.detail != Gdk.NotifyType.INFERIOR:
-            self.hovering = False
+            self.state.hover = self.state.manual = False
             self.schedule_close()
         return False
 
     def schedule_close(self):
-        if self.menu is not None or self.timer or self.notice_timer:
+        if self.state.page is not Page.CLOSED or self.timer:
             return
         def close():
             self.timer = 0
-            return self.animate(False)
+            self.sync_page()
+            return GLib.SOURCE_REMOVE
         self.timer = GLib.timeout_add(300, close)
 
     def hold_menu(self, menu):
-        self.menu = menu
+        self.state.menu = True
         def done(*_):
-            self.menu = None
+            self.state.menu = False
             self.schedule_close()
         menu.connect('deactivate', done)
 
     def key(self, _widget, event):
         if event.keyval == Gdk.KEY_Escape:
-            self.animate(False)
+            self.state.hover = self.state.manual = False
+            self.dismiss_notice()
             return True
         if event.keyval in (Gdk.KEY_Return, Gdk.KEY_space) and not self.target:
-            self.animate(True)
+            self.state.manual = True
+            self.sync_page()
             return True
         return False
 
