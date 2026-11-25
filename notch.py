@@ -12,6 +12,7 @@ from gi.repository import DbusmenuGtk3, Gdk, GdkPixbuf, Gio, GLib, Gtk, GtkLayer
 
 from audio import AudioControls
 from focus_timer import FocusTimer
+from agenda_panel import AgendaPanel
 from notch_state import Banner, NotchState, Page
 from notifications import NotificationMonitor
 from outputs import OutputBinding
@@ -216,6 +217,7 @@ class Notch:
         self.tick = self.timer = 0
         self.notice_timer = 0
         self.state = NotchState()
+        self.agenda = None
         self.count = 0
         self.height = 74
         self.window = Gtk.Window(decorated=False, app_paintable=True, resizable=False)
@@ -265,6 +267,9 @@ class Notch:
         self.audio = AudioControls(self.layout_audio, WIDTH - 2 * INSET)
         self.canvas.put(self.audio, INSET, 0)
         self.layout_audio()
+        self.agenda = AgendaPanel(self.layout_audio, WIDTH - 2 * INSET)
+        self.canvas.put(self.agenda, INSET, 0)
+        self.layout_audio()
         self.tray = Tray(self.grid, self.on_items, self.hold_menu)
         self.notifications = NotificationMonitor(self.show_notice)
         self.output = OutputBinding(self.window.get_display(), self.window, self.output_changed)
@@ -295,9 +300,13 @@ class Notch:
         self.canvas.move(self.focus, INSET, self.open_height() - 44)
         self.canvas.set_size_request(WIDTH, max(104, self.open_height()))
         self.frame()
+        if self.agenda is not None:
+            self.canvas.move(self.agenda, INSET, self.height + 68 + (68 if self.audio and self.audio.media.get_visible() else 0))
 
     def open_height(self):
-        return self.height + 88 + (68 if self.audio and self.audio.media.get_visible() else 0)
+        media = 68 if self.audio and self.audio.media.get_visible() else 0
+        agenda = self.agenda.height if self.agenda is not None else 0
+        return self.height + 88 + media + agenda
 
     def geometry(self):
         high = 104 if self.displayed_banner else self.open_height()
@@ -347,6 +356,8 @@ class Notch:
             self.audio.set_visible(tray_visible)
         self.notice_box.set_visible(visible and self.displayed_banner is not None)
         self.focus.set_visible(tray_visible)
+        if self.agenda is not None:
+            self.agenda.set_visible(tray_visible)
         surface = self.window.get_window()
         if surface:
             surface.input_shape_combine_region(cairo.Region(cairo.RectangleInt((WIDTH - w) // 2, 0, w, h)), 0, 0)
