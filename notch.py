@@ -264,11 +264,13 @@ class Notch:
         self.animate(self.state.page in (Page.TRAY, Page.BANNER))
         self.frame()
 
+    FOCUS_ALERT_MS = 3000
+
     def focus_complete(self):
         self.play_alert()
         self.state.queued = Banner('Timer Fokus', 'Waktu fokus selesai',
                                   'Ambil jeda sebelum sesi berikutnya.')
-        self.show_queued_banner()
+        self.show_queued_banner(timeout_ms=self.FOCUS_ALERT_MS)
 
     def play_alert(self):
         self.flash = 1.0
@@ -286,23 +288,32 @@ class Notch:
 
         self.flash_source = GLib.timeout_add(160, step)
         try:
-            Gio.Subprocess.new(['paplay', '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga'],
-                               Gio.SubprocessFlags.STDERR_SILENCE | Gio.SubprocessFlags.STDOUT_SILENCE)
+            player = Gio.Subprocess.new(
+                ['paplay', '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga'],
+                Gio.SubprocessFlags.STDERR_SILENCE | Gio.SubprocessFlags.STDOUT_SILENCE)
         except GLib.Error as exc:
             logging.debug('Alert sound unavailable: %s', exc)
+            return
 
-    def show_queued_banner(self):
+        def cut_sound():
+            try:
+                player.send_signal(15)
+            except GLib.Error as exc:
+                logging.debug('Alert sound already finished: %s', exc)
+            return GLib.SOURCE_REMOVE
+
+    def show_queued_banner(self, timeout_ms=5500):
         banner = self.state.take_queued()
         if banner is not None:
-            self.show_notice(banner.app, banner.title, banner.body)
+            self.show_notice(banner.app, banner.title, banner.body, timeout_ms)
 
-    def show_notice(self, app, title, body):
+    def show_notice(self, app, title, body, timeout_ms=5500):
         if self.notice_timer:
             GLib.source_remove(self.notice_timer)
         self.state.show(Banner(app, title, body))
         for label, text in zip(self.banner_labels, (app, title, body)):
             label.set_text(text)
-        self.notice_timer = GLib.timeout_add(5500, self.expire_notice)
+        self.notice_timer = GLib.timeout_add(timeout_ms, self.expire_notice)
         self.sync_page()
 
     def expire_notice(self):
